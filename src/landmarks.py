@@ -1,5 +1,8 @@
 import cv2
-from utils import face_mesh, LM_INDICES
+import mediapipe as mp
+
+mp_face_mesh = mp.solutions.face_mesh
+face_mesh = mp_face_mesh.FaceMesh(static_image_mode=False, max_num_faces=1, refine_landmarks=False)
 
 cap = cv2.VideoCapture(0)
 while True:
@@ -12,7 +15,8 @@ while True:
     if results.multi_face_landmarks:
         landmarks = results.multi_face_landmarks[0]
         h, w = frame.shape[:2]
-        for i in LM_INDICES:
+        indices = [33, 263, 1, 61, 291]  # left eye, right eye, nose, left mouth, right mouth
+        for i in indices:
             x = int(landmarks.landmark[i].x * w)
             y = int(landmarks.landmark[i].y * h)
             cv2.circle(frame, (x, y), 3, (0, 255, 0), -1)

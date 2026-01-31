@@ -2,4 +2,4 @@ opencv-python
 mediapipe
 onnxruntime
 numpy
-matplotlib==0.10.14
+matplotlib
