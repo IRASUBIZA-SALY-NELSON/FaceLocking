@@ -1,11 +1,16 @@
 import cv2
 import numpy as np
 import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
 import onnxruntime as ort
 import pickle
 import os
 from datetime import datetime
 import traceback
+import paho.mqtt.client as mqtt
+import json
+import time
 
 # ===================== CONFIGURATION =====================
 THRESHOLD = 0.62  # Face recognition similarity threshold
@@ -16,20 +21,39 @@ BLINK_EAR_THRESHOLD = 0.21
 SMILE_CONFIDENCE_THRESHOLD = 0.65
 CONSECUTIVE_SMILE_FRAMES = 3
 MAX_FACES = 10  # Maximum faces to detect/process per frame
+
+# ===================== MQTT CONFIGURATION =====================
+TEAM_ID = "minister"  # Your unique team identifier
+MQTT_BROKER = "localhost"  # Change to your VPS IP address
+MQTT_PORT = 1883
+MQTT_TOPIC = f"vision/{TEAM_ID}/movement"
+MQTT_HEARTBEAT_TOPIC = f"vision/{TEAM_ID}/heartbeat"
+
+# ===================== SERVO CONFIGURATION =====================
+SERVO_MIN_ANGLE = 0
+SERVO_MAX_ANGLE = 180
+FRAME_WIDTH = 1280  # Camera frame width
+SERVO_SMOOTHING = 0.3  # Smoothing factor for servo movement
+
+# ===================== PERFORMANCE OPTIMIZATION =====================
+TRACKING_MODE = True  # Start in tracking mode after lock
+PROCESS_EVERY_N_FRAMES = 3  # Process every Nth frame when tracking
+MIN_FACE_SIZE = 50  # Minimum face size to process
+MAX_FACE_SIZE = 500  # Maximum face size to process
+STABILITY_THRESHOLD = 5  # Frames of stable position before reducing processing
 BBOX_PADDING = 0.25  # Padding around landmarks for bounding box (extra head room)
 
 # ===================== INITIALIZATION =====================
 print("Initializing multi-face detection system...")
 
-# Initialize MediaPipe Face Mesh with multi-face support
-mp_face_mesh = mp.solutions.face_mesh
-face_mesh = mp_face_mesh.FaceMesh(
-    static_image_mode=False,
-    max_num_faces=MAX_FACES,
-    refine_landmarks=True,
-    min_detection_confidence=0.5,
-    min_tracking_confidence=0.5
+# Initialize FaceLandmarker detector using Tasks API
+base_options = python.BaseOptions(model_asset_path="../models/face_landmarker.task")
+options = vision.FaceLandmarkerOptions(
+    base_options=base_options,
+    running_mode=vision.RunningMode.IMAGE,
+    num_faces=MAX_FACES
 )
+face_mesh = vision.FaceLandmarker.create_from_options(options)
 
 # Initialize ONNX Runtime session for ArcFace
 try:
@@ -68,29 +92,29 @@ def get_embedding(aligned):
     return emb / np.linalg.norm(emb)
 
 def compute_ear(landmarks, eye_indices, h, w):
-    points = np.array([[landmarks.landmark[i].x * w, landmarks.landmark[i].y * h] for i in eye_indices])
+    points = np.array([[landmarks[i].x * w, landmarks[i].y * h] for i in eye_indices])
     A = np.linalg.norm(points[1] - points[5])
     B = np.linalg.norm(points[2] - points[4])
     C = np.linalg.norm(points[0] - points[3])
     return (A + B) / (2.0 * C) if C > 0 else 0
 
 def detect_smile(landmarks, h, w, baseline_mouth_width=None, baseline_lip_sep=None):
-    left_mouth = np.array([landmarks.landmark[61].x * w, landmarks.landmark[61].y * h])
-    right_mouth = np.array([landmarks.landmark[291].x * w, landmarks.landmark[291].y * h])
-    upper_lip_top = np.array([landmarks.landmark[13].x * w, landmarks.landmark[13].y * h])
-    lower_lip_bottom = np.array([landmarks.landmark[14].x * w, landmarks.landmark[14].y * h])
+    left_mouth = np.array([landmarks[61].x * w, landmarks[61].y * h])
+    right_mouth = np.array([landmarks[291].x * w, landmarks[291].y * h])
+    upper_lip_top = np.array([landmarks[13].x * w, landmarks[13].y * h])
+    lower_lip_bottom = np.array([landmarks[14].x * w, landmarks[14].y * h])
 
     mouth_width = np.linalg.norm(left_mouth - right_mouth)
     lip_separation = np.linalg.norm(upper_lip_top - lower_lip_bottom)
 
-    left_eye = np.array([landmarks.landmark[33].x * w, landmarks.landmark[33].y * h])
-    right_eye = np.array([landmarks.landmark[263].x * w, landmarks.landmark[263].y * h])
+    left_eye = np.array([landmarks[33].x * w, landmarks[33].y * h])
+    right_eye = np.array([landmarks[263].x * w, landmarks[263].y * h])
     face_width = np.linalg.norm(left_eye - right_eye)
 
     normalized_width = mouth_width / face_width if face_width > 0 else 0
     normalized_sep = lip_separation / face_width if face_width > 0 else 0
 
-    nose_tip = np.array([landmarks.landmark[1].x * w, landmarks.landmark[1].y * h])
+    nose_tip = np.array([landmarks[1].x * w, landmarks[1].y * h])
     left_corner_height = left_mouth[1] - nose_tip[1]
     right_corner_height = right_mouth[1] - nose_tip[1]
 
@@ -128,10 +152,10 @@ class ActionDetector:
         self.blink_frames = 0
 
     def update_baseline(self, landmarks, h, w):
-        left_mouth = np.array([landmarks.landmark[61].x * w, landmarks.landmark[61].y * h])
-        right_mouth = np.array([landmarks.landmark[291].x * w, landmarks.landmark[291].y * h])
-        upper_lip_top = np.array([landmarks.landmark[13].x * w, landmarks.landmark[13].y * h])
-        lower_lip_bottom = np.array([landmarks.landmark[14].x * w, landmarks.landmark[14].y * h])
+        left_mouth = np.array([landmarks[61].x * w, landmarks[61].y * h])
+        right_mouth = np.array([landmarks[291].x * w, landmarks[291].y * h])
+        upper_lip_top = np.array([landmarks[13].x * w, landmarks[13].y * h])
+        lower_lip_bottom = np.array([landmarks[14].x * w, landmarks[14].y * h])
         self.baseline_mouth_width = np.linalg.norm(left_mouth - right_mouth)
         self.baseline_lip_sep = np.linalg.norm(upper_lip_top - lower_lip_bottom)
 
@@ -140,7 +164,7 @@ class ActionDetector:
         if not locked:
             return actions
 
-        nose_x = int(landmarks.landmark[1].x * w)
+        nose_x = int(landmarks[1].x * w)
         if self.prev_nose_x is not None:
             delta_x = nose_x - self.prev_nose_x
             if abs(delta_x) > MOVEMENT_THRESHOLD:
@@ -172,6 +196,98 @@ class ActionDetector:
             self.update_baseline(landmarks, h, w)
 
         return actions
+
+# ===================== MQTT FUNCTIONS =====================
+mqtt_client = None
+current_servo_angle = 90  # Start at center position
+target_servo_angle = 90
+
+def on_mqtt_connect(client, userdata, flags, rc):
+    if rc == 0:
+        print(f"✓ Connected to MQTT broker at {MQTT_BROKER}:{MQTT_PORT}")
+        # Send initial heartbeat
+        send_heartbeat()
+    else:
+        print(f"✗ Failed to connect to MQTT broker: {rc}")
+
+def on_mqtt_disconnect(client, userdata, rc):
+    print(f"✗ Disconnected from MQTT broker: {rc}")
+
+def init_mqtt():
+    global mqtt_client
+    try:
+        mqtt_client = mqtt.Client()
+        mqtt_client.on_connect = on_mqtt_connect
+        mqtt_client.on_disconnect = on_mqtt_disconnect
+
+        print(f"Connecting to MQTT broker at {MQTT_BROKER}:{MQTT_PORT}...")
+        mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
+        mqtt_client.loop_start()
+        return True
+    except Exception as e:
+        print(f"✗ Failed to initialize MQTT: {e}")
+        return False
+
+def calculate_servo_angle(face_center_x):
+    """Calculate servo angle based on face position in frame"""
+    # Map face x-position (0 to FRAME_WIDTH) to servo angle (SERVO_MIN_ANGLE to SERVO_MAX_ANGLE)
+    # Invert mapping so that left face movement turns servo left, right movement turns servo right
+    normalized_x = face_center_x / FRAME_WIDTH
+    angle = SERVO_MAX_ANGLE - (normalized_x * (SERVO_MAX_ANGLE - SERVO_MIN_ANGLE))
+    return max(SERVO_MIN_ANGLE, min(SERVO_MAX_ANGLE, angle))
+
+def send_heartbeat():
+    """Send heartbeat message to MQTT broker"""
+    if mqtt_client:
+        heartbeat_msg = {
+            "node": "pc",
+            "status": "ONLINE",
+            "timestamp": int(time.time())
+        }
+        try:
+            mqtt_client.publish(MQTT_HEARTBEAT_TOPIC, json.dumps(heartbeat_msg))
+        except Exception as e:
+            print(f"Error sending heartbeat: {e}")
+
+def publish_movement(status, confidence=0.0, face_center_x=None):
+    """Publish movement status and servo angle to MQTT"""
+    global current_servo_angle, target_servo_angle
+
+    if not mqtt_client:
+        return
+
+    movement_msg = {
+        "status": status,
+        "confidence": float(confidence),  # Convert numpy float32 to Python float
+        "timestamp": int(time.time())
+    }
+
+    # Calculate and add servo angle if we have a face position
+    if face_center_x is not None:
+        target_servo_angle = calculate_servo_angle(face_center_x)
+        # Apply smoothing to reduce jitter
+        current_servo_angle = (SERVO_SMOOTHING * target_servo_angle +
+                              (1 - SERVO_SMOOTHING) * current_servo_angle)
+
+        movement_msg["servo_angle"] = round(float(current_servo_angle), 1)  # Convert to Python float
+        movement_msg["face_position"] = int(face_center_x)
+
+        # Add degree movement information
+        angle_change = abs(current_servo_angle - 90)  # Change from center
+        movement_msg["degrees_from_center"] = round(float(angle_change), 1)  # Convert to Python float
+
+        if status == "MOVE_LEFT":
+            movement_msg["direction"] = "LEFT"
+        elif status == "MOVE_RIGHT":
+            movement_msg["direction"] = "RIGHT"
+        else:
+            movement_msg["direction"] = "CENTERED"
+
+    try:
+        mqtt_client.publish(MQTT_TOPIC, json.dumps(movement_msg))
+        print(f"📡 Published: {movement_msg['status']} | Angle: {movement_msg.get('servo_angle', 'N/A')}° | Direction: {movement_msg.get('direction', 'N/A')}")
+    except Exception as e:
+        print(f"Error publishing movement: {e}")
 
 # ===================== LOAD FACE DATABASE =====================
 try:
@@ -205,6 +321,12 @@ history_file = None
 fps_counter = 0
 start_time = datetime.now()
 
+# Performance optimization variables
+frame_count = 0
+stable_frames = 0
+prev_position = None
+processing_mode = "full"  # "full" or "tracking"
+
 print("\n" + "=" * 50)
 print(f"Target: {TARGET_NAME.capitalize()}")
 print("Controls:")
@@ -224,6 +346,21 @@ cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 cap.set(cv2.CAP_PROP_FPS, 30)
 
+# Create resizable window
+cv2.namedWindow('Face Locking System', cv2.WINDOW_NORMAL)
+cv2.resizeWindow('Face Locking System', 1280, 720)
+
+print("Face locking window is resizable!")
+print("Use mouse to resize or maximize the window")
+
+# Initialize MQTT connection
+if not init_mqtt():
+    print("Warning: MQTT connection failed. Continuing without servo control.")
+
+# Initialize heartbeat timer
+last_heartbeat_time = time.time()
+HEARTBEAT_INTERVAL = 30  # Send heartbeat every 30 seconds
+
 while True:
     ret, frame = cap.read()
     if not ret:
@@ -232,64 +369,117 @@ while True:
     frame = cv2.flip(frame, 1)
     h_frame, w_frame = frame.shape[:2]
     fps_counter += 1
+    frame_count += 1
 
-    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    results = face_mesh.process(rgb_frame)
+    # Performance optimization: Smart processing decision
+    should_process = True
 
+    if locked and processing_mode == "tracking":
+        # In tracking mode, only process every Nth frame or if movement detected
+        should_process = (frame_count % PROCESS_EVERY_N_FRAMES == 0)
+
+        # Also process if significant movement detected
+        if prev_position and should_process == False:
+            current_position = (prev_bbox[0] + prev_bbox[2]//2, prev_bbox[1] + prev_bbox[3]//2)
+            movement = abs(current_position[0] - prev_position[0]) + abs(current_position[1] - prev_position[1])
+            should_process = movement > MOVEMENT_THRESHOLD
+
+    elif locked:
+        # Recently locked, check for stability before switching to tracking mode
+        if prev_bbox and stable_frames < STABILITY_THRESHOLD:
+            current_position = (prev_bbox[0] + prev_bbox[2]//2, prev_bbox[1] + prev_bbox[3]//2)
+            if prev_position:
+                movement = abs(current_position[0] - prev_position[0]) + abs(current_position[1] - prev_position[1])
+                if movement < MOVEMENT_THRESHOLD:
+                    stable_frames += 1
+                    if stable_frames >= STABILITY_THRESHOLD:
+                        processing_mode = "tracking"
+                        print(f"✓ Switched to tracking mode (stable for {stable_frames} frames)")
+
+    # Only run face detection if we should process
     recognized_faces = []
+    if should_process or not locked:
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+        results = face_mesh.detect(mp_image)
 
-    if results.multi_face_landmarks:
-        for face_landmarks in results.multi_face_landmarks:
-            # 5-point alignment on full frame
-            pts = np.array([[face_landmarks.landmark[i].x * w_frame,
-                             face_landmarks.landmark[i].y * h_frame] for i in INDICES_5PT],
-                           dtype=np.float32)
-            try:
-                M, _ = cv2.estimateAffinePartial2D(pts, REF_POINTS)
-                aligned = cv2.warpAffine(frame, M, (112, 112), flags=cv2.INTER_LINEAR)
-
-                query_emb = get_embedding(aligned)
-
-                sim_to_target = np.dot(query_emb, target_emb)
-                sims = {n: np.dot(query_emb, emb) for n, emb in reference.items()}
-                best_sim = max(sims.values()) if sims else -1
-                best_name = max(sims, key=sims.get) if best_sim >= THRESHOLD else "Unknown"
-
-                # Compute bounding box with padding
-                x_coords = np.array([l.x for l in face_landmarks.landmark])
-                y_coords = np.array([l.y for l in face_landmarks.landmark])
+        if results.face_landmarks:
+            for face_landmarks in results.face_landmarks:
+                # Size filtering - skip small/large detections
+                x_coords = np.array([l.x for l in face_landmarks])
+                y_coords = np.array([l.y for l in face_landmarks])
                 x_min, x_max = np.min(x_coords), np.max(x_coords)
                 y_min, y_max = np.min(y_coords), np.max(y_coords)
+                face_width = (x_max - x_min) * w_frame
+                face_height = (y_max - y_min) * h_frame
 
-                width = x_max - x_min
-                height = y_max - y_min
+                if MIN_FACE_SIZE < face_width < MAX_FACE_SIZE and MIN_FACE_SIZE < face_height < MAX_FACE_SIZE:
+                    # 5-point alignment on full frame
+                    pts = np.array([[face_landmarks[i].x * w_frame,
+                                     face_landmarks[i].y * h_frame] for i in INDICES_5PT],
+                                   dtype=np.float32)
+                    try:
+                        M, _ = cv2.estimateAffinePartial2D(pts, REF_POINTS)
+                        aligned = cv2.warpAffine(frame, M, (112, 112), flags=cv2.INTER_LINEAR)
 
-                x_min -= width * BBOX_PADDING
-                x_max += width * BBOX_PADDING
-                y_min -= height * (BBOX_PADDING + 0.2)  # Extra room for forehead
-                y_max += height * BBOX_PADDING
+                        query_emb = get_embedding(aligned)
 
-                x_min_pix = max(0, int(x_min * w_frame))
-                y_min_pix = max(0, int(y_min * h_frame))
-                x_max_pix = min(w_frame, int(x_max * w_frame))
-                y_max_pix = min(h_frame, int(y_max * h_frame))
+                        sim_to_target = np.dot(query_emb, target_emb)
+                        sims = {n: np.dot(query_emb, emb) for n, emb in reference.items()}
+                        best_sim = max(sims.values()) if sims else -1
+                        best_name = max(sims, key=sims.get) if best_sim >= THRESHOLD else "Unknown"
 
-                w_bbox = x_max_pix - x_min_pix
-                h_bbox = y_max_pix - y_min_pix
+                        # Compute bounding box with padding
+                        x_coords = np.array([l.x for l in face_landmarks])
+                        y_coords = np.array([l.y for l in face_landmarks])
+                        x_min, x_max = np.min(x_coords), np.max(x_coords)
+                        y_min, y_max = np.min(y_coords), np.max(y_coords)
 
-                if w_bbox <= 0 or h_bbox <= 0:
-                    continue
+                        width = x_max - x_min
+                        height = y_max - y_min
 
-                recognized_faces.append({
-                    'bbox': (x_min_pix, y_min_pix, w_bbox, h_bbox),
-                    'name': best_name,
-                    'sim': best_sim,
-                    'sim_to_target': sim_to_target,
-                    'lm': face_landmarks,
-                    'aligned': aligned
-                })
-            except Exception:
-                continue
+                        x_min -= width * BBOX_PADDING
+                        x_max += width * BBOX_PADDING
+                        y_min -= height * (BBOX_PADDING + 0.2)  # Extra room for forehead
+                        y_max += height * BBOX_PADDING
+
+                        x_min_pix = max(0, int(x_min * w_frame))
+                        y_min_pix = max(0, int(y_min * h_frame))
+                        x_max_pix = min(w_frame, int(x_max * w_frame))
+                        y_max_pix = min(h_frame, int(y_max * h_frame))
+
+                        w_bbox = x_max_pix - x_min_pix
+                        h_bbox = y_max_pix - y_min_pix
+
+                        if w_bbox <= 0 or h_bbox <= 0:
+                            continue
+
+                        recognized_faces.append({
+                            'bbox': (x_min_pix, y_min_pix, w_bbox, h_bbox),
+                            'name': best_name,
+                            'sim': best_sim,
+                            'sim_to_target': sim_to_target,
+                            'lm': face_landmarks,
+                            'aligned': aligned
+                        })
+                    except Exception as e:
+                        print(f"Error processing face: {e}")
+                        continue
+
+    # Update position tracking for optimization
+    try:
+        if recognized_faces:
+            current_bbox = recognized_faces[0]['bbox']
+            if prev_position:
+                movement = abs((current_bbox[0] + current_bbox[2]//2) - prev_position[0]) + abs((current_bbox[1] + current_bbox[3]//2) - prev_position[1])
+                if movement > MOVEMENT_THRESHOLD:
+                    stable_frames = 0  # Reset stability if movement detected
+            prev_position = (current_bbox[0] + current_bbox[2]//2, current_bbox[1] + current_bbox[3]//2)
+        else:
+            stable_frames = 0
+            prev_position = None
+    except Exception as e:
+        print(f"Error updating position tracking: {e}")
 
     # Identify target instances
     target_faces = [fd for fd in recognized_faces if fd['sim_to_target'] >= THRESHOLD]
@@ -335,12 +525,32 @@ while True:
 
         prev_bbox = locked_face['bbox']
         miss_count = 0
+
+        # Calculate face center and publish movement data
+        face_center_x = locked_face['bbox'][0] + locked_face['bbox'][2] // 2
+        face_center_y = locked_face['bbox'][1] + locked_face['bbox'][3] // 2
+
+        # Determine movement status based on face position
+        frame_center_x = w_frame // 2
+        threshold = w_frame // 10  # 10% of frame width as dead zone
+
+        if face_center_x < frame_center_x - threshold:
+            status = "MOVE_LEFT"
+        elif face_center_x > frame_center_x + threshold:
+            status = "MOVE_RIGHT"
+        else:
+            status = "CENTERED"
+
+        # Publish movement data with confidence
+        publish_movement(status, locked_face['sim_to_target'], face_center_x)
     else:
         if locked:
             miss_count += 1
             if miss_count > MISS_TOLERANCE:
                 locked = False
                 print("\n⚠ Lock released - target disappeared")
+                # Publish NO_FACE status
+                publish_movement("NO_FACE")
                 if history_file and locked_start:
                     duration = datetime.now() - locked_start
                     with open(history_file, 'a') as f:
@@ -355,13 +565,7 @@ while True:
     if not locked and recognized_faces:
         candidate_face = max(recognized_faces, key=lambda fd: fd['sim_to_target'])
 
-    # Show aligned face
-    if locked_face:
-        cv2.imshow('Aligned Face', locked_face['aligned'])
-    elif candidate_face:
-        cv2.imshow('Aligned Face', candidate_face['aligned'])
-    else:
-        cv2.imshow('Aligned Face', np.zeros((112, 112, 3), dtype=np.uint8))
+    # Remove aligned face window - only show main window
 
     # Draw all faces
     for fd in recognized_faces:
@@ -408,7 +612,31 @@ while True:
     status_line = f"FPS: {fps:.1f} | Status: {'LOCKED' if locked else 'SEARCHING'} | Faces: {len(recognized_faces)}"
     cv2.putText(frame, status_line, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
-    cv2.imshow('Face Locking System', frame)
+    # Get current window size and resize frame to match (maintain aspect ratio)
+    window_width = cv2.getWindowImageRect('Face Locking System')[2]
+    window_height = cv2.getWindowImageRect('Face Locking System')[3]
+
+    if window_width > 0 and window_height > 0:
+        h, w = frame.shape[:2]
+        aspect_ratio = w / h
+
+        new_width = window_width
+        new_height = int(window_width / aspect_ratio)
+
+        if new_height > window_height:
+            new_height = window_height
+            new_width = int(window_height * aspect_ratio)
+
+        frame_resized = cv2.resize(frame, (new_width, new_height))
+        cv2.imshow('Face Locking System', frame_resized)
+    else:
+        cv2.imshow('Face Locking System', frame)
+
+    # Send periodic heartbeat
+    current_time = time.time()
+    if current_time - last_heartbeat_time > HEARTBEAT_INTERVAL:
+        send_heartbeat()
+        last_heartbeat_time = current_time
 
     key = cv2.waitKey(1) & 0xFF
     if key == ord('q'):
@@ -425,6 +653,12 @@ while True:
         history_file = None
         locked_start = None
         action_detector = ActionDetector()
+
+# Cleanup MQTT connection
+if mqtt_client:
+    mqtt_client.loop_stop()
+    mqtt_client.disconnect()
+    print("✓ MQTT connection closed")
 
 cap.release()
 cv2.destroyAllWindows()
