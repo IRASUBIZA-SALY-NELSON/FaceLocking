@@ -290,8 +290,6 @@
                 this.ws = null;
                 this.reconnectInterval = null;
                 this.heartbeatData = {};
-
-                // Configuration - change this to your VPS IP
                 this.wsUrl = 'ws://157.173.101.159:9003'; // Change to your VPS IP:9003
 
                 this.init();
@@ -327,12 +325,10 @@
                         this.updateConnectionStatus(false);
                         this.scheduleReconnect();
                     };
-
                     this.ws.onerror = (error) => {
                         console.error('WebSocket error:', error);
                         this.updateConnectionStatus(false);
                     };
-
                 } catch (error) {
                     console.error('Error creating WebSocket:', error);
                     this.scheduleReconnect();
@@ -372,7 +368,6 @@
                 const facePosition = data.face_position || 0;
                 const degreesFromCenter = data.degrees_from_center || 0;
 
-                // Update movement status display
                 const statusElement = document.getElementById('movement-status');
                 statusElement.textContent = status.replace('_', ' ');
                 statusElement.className = 'movement-status';
@@ -394,17 +389,14 @@
                         statusElement.classList.add('status-unknown');
                 }
 
-                // Update info grid
                 document.getElementById('direction').textContent = direction;
                 document.getElementById('confidence').textContent = `${(confidence * 100).toFixed(1)}%`;
                 document.getElementById('face-position').textContent = `${facePosition}px`;
 
-                // Update servo display
                 document.getElementById('servo-angle').textContent = `${servoAngle}°`;
                 document.getElementById('target-angle').textContent = `${servoAngle}°`;
                 document.getElementById('degrees-from-center').textContent = `${degreesFromCenter}°`;
 
-                // Update servo bar
                 const servoIndicator = document.getElementById('servo-indicator');
                 servoIndicator.style.width = `${(servoAngle / 180) * 100}%`;
             }
@@ -418,7 +410,6 @@
                     status: status,
                     timestamp: timestamp
                 };
-
                 this.renderHeartbeatList();
             }
 
@@ -474,8 +465,6 @@
                     this.reconnectInterval = null;
                 }
             }
-
-            // Send ping to server every 30 seconds
             startPingInterval() {
                 setInterval(() => {
                     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -485,7 +474,6 @@
             }
         }
 
-        // Initialize dashboard when page loads
         document.addEventListener('DOMContentLoaded', () => {
             const dashboard = new Dashboard();
             dashboard.startPingInterval();
