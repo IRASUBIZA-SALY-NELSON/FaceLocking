@@ -23,8 +23,8 @@ CONSECUTIVE_SMILE_FRAMES = 3
 MAX_FACES = 10  # Maximum faces to detect/process per frame
 
 # ===================== MQTT CONFIGURATION =====================
-TEAM_ID = "minister"  # Your unique team identifier
-MQTT_BROKER = "157.173.101.159"  # Change to your VPS IP address
+TEAM_ID = "sudoers"  # Your unique team identifier
+MQTT_BROKER = "157.173.101.159"  # Your VPS MQTT broker
 MQTT_PORT = 1883
 MQTT_TOPIC = f"vision/{TEAM_ID}/movement"
 MQTT_HEARTBEAT_TOPIC = f"vision/{TEAM_ID}/heartbeat"

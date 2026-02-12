@@ -20,8 +20,8 @@ MQTT_CLIENT_ID = f"esp8266_{TEAM_ID}"
 # Servo configuration
 SERVO_PIN = 2  # GPIO pin for servo (D4 on NodeMCU)
 SERVO_FREQ = 50  # 50Hz for standard servos
-SERVO_MIN_DUTY = 40  # ~0.5ms pulse (0 degrees)
-SERVO_MAX_DUTY = 115  # ~2.5ms pulse (180 degrees)
+SERVO_MIN_DUTY = 26  # ~0.5ms pulse (0 degrees) - adjusted for SG90
+SERVO_MAX_DUTY = 128  # ~2.5ms pulse (180 degrees) - adjusted for SG90
 SERVO_CENTER_DUTY = 77  # ~1.5ms pulse (90 degrees)
 
 # WiFi configuration
