@@ -1,0 +1,13 @@
+Face locking started for Nelson at 2026-02-12 08:56:29.559115
+Initial similarity: 0.6740
+--------------------------------------------------
+08:56:29.885 | moved right (50px)
+08:56:30.346 | moved left (58px)
+08:56:34.311 | moved left (52px)
+08:56:34.890 | blink (EAR: 0.16)
+08:56:36.228 | blink (EAR: 0.21)
+08:56:37.268 | blink (EAR: 0.21)
+08:56:39.504 | blink (EAR: 0.15)
+08:56:41.205 | blink (EAR: 0.17)
+08:56:42.759 | blink (EAR: 0.21)
+08:56:45.272 | blink (EAR: 0.12)

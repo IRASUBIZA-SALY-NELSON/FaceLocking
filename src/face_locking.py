@@ -24,7 +24,7 @@ MAX_FACES = 10  # Maximum faces to detect/process per frame
 
 # ===================== MQTT CONFIGURATION =====================
 TEAM_ID = "minister"  # Your unique team identifier
-MQTT_BROKER = "localhost"  # Change to your VPS IP address
+MQTT_BROKER = "157.173.101.159"  # Change to your VPS IP address
 MQTT_PORT = 1883
 MQTT_TOPIC = f"vision/{TEAM_ID}/movement"
 MQTT_HEARTBEAT_TOPIC = f"vision/{TEAM_ID}/heartbeat"
