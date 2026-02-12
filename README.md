@@ -1,5 +1,9 @@
 # Distributed Vision-Control System (Face-Locked Servo)
 
+**Team: sudoers**
+**Student: IRASUBIZA Saly Nelson**
+**Live Dashboard: http://157.173.101.159:9002/src/dashboard.html**
+
 ## Overview
 A complete distributed vision-control system that detects and tracks faces using computer vision, publishes movement commands via MQTT, and controls a servo motor to respond accordingly. The system allows multiple teams to operate simultaneously on the same MQTT broker without interference.
 
@@ -84,39 +88,40 @@ python src/face_locking.py
 
 #### PC Vision Node Configuration
 Edit `src/face_locking.py`:
-- `TEAM_ID = "your_team_id"` (must be unique)
-- `MQTT_BROKER = "your_vps_ip"` (your VPS IP address)
+- `TEAM_ID = "sudoers"` (unique team identifier)
+- `MQTT_BROKER = "157.173.101.159"` (VPS IP address)
 
 #### ESP8266 Edge Controller
-Edit `src/esp8266_servo_controller.py`:
-- `TEAM_ID = "your_team_id"` (must match PC)
-- `MQTT_BROKER = "your_vps_ip"`
-- `WIFI_SSID = "your_wifi_name"`
-- `WIFI_PASSWORD = "your_wifi_password"`
+Edit `src/esp8266_servo_controller.ino`:
+- `TEAM_ID = "sudoers"` (must match PC)
+- `MQTT_BROKER = "157.173.101.159"` (VPS IP address)
+- `WIFI_SSID = "RCA"` (WiFi network)
+- `WIFI_PASSWORD = "@RcaNyabihu2023"` (WiFi password)
 
 #### Backend API Service (VPS)
 ```bash
 # Install MQTT broker
 sudo apt install mosquitto mosquitto-clients
 sudo systemctl start mosquitto
+sudo ufw allow 1883
 
 # Install Python dependencies
-pip install -r requirements_backend.txt
+pip install websockets paho-mqtt
 
 # Run backend service
 python src/websocket_backend.py
 ```
 
 #### Web Dashboard
-Open `src/dashboard.html` in browser and update WebSocket URL:
-```javascript
-this.wsUrl = 'ws://YOUR_VPS_IP:9002';
+Open `src/dashboard.html` in browser - WebSocket URL configured to:
+```
+ws://157.173.101.159:9002
 ```
 
 ## MQTT Topic Structure
 
 ### Movement Messages (PC → Broker)
-**Topic:** `vision/<team_id>/movement`
+**Topic:** `vision/sudoers/movement`
 
 **Payload Example:**
 ```json
@@ -138,7 +143,7 @@ this.wsUrl = 'ws://YOUR_VPS_IP:9002';
 - `NO_FACE`: No target face detected
 
 ### Heartbeat Messages (Any Node → Broker)
-**Topic:** `vision/<team_id>/heartbeat`
+**Topic:** `vision/sudoers/heartbeat`
 
 **Payload Example:**
 ```json

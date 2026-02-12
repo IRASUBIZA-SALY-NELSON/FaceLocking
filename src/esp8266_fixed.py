@@ -1,6 +1,7 @@
 """
 ESP8266 Servo Controller for Face-Locked Tracking System
-Receives MQTT movement commands and controls servo motor accordingly
+Receives MQTT movement commands and controls servo accordingly
+FIXED VERSION - Corrected duty cycles
 """
 
 import machine
@@ -17,12 +18,12 @@ MQTT_PORT = 1883
 MQTT_TOPIC = f"vision/{TEAM_ID}/movement"
 MQTT_CLIENT_ID = f"esp8266_{TEAM_ID}"
 
-# Servo configuration
+# Servo configuration - CORRECTED VALUES
 SERVO_PIN = 2  # GPIO pin for servo (D4 on NodeMCU)
 SERVO_FREQ = 50  # 50Hz for standard servos
-SERVO_MIN_DUTY = 26  # ~0.5ms pulse (0 degrees) - adjusted for SG90
-SERVO_MAX_DUTY = 128  # ~2.5ms pulse (180 degrees) - adjusted for SG90
-SERVO_CENTER_DUTY = 77  # ~1.5ms pulse (90 degrees)
+SERVO_MIN_DUTY = 26  # ~0.5ms pulse (0 degrees) - WORKING VALUES
+SERVO_MAX_DUTY = 128  # ~2.5ms pulse (180 degrees) - WORKING VALUES
+SERVO_CENTER_DUTY = 77  # ~1.5ms pulse (90 degrees) - WORKING VALUES
 
 # WiFi configuration
 WIFI_SSID = "RCA"  # Replace with your WiFi SSID
@@ -41,7 +42,7 @@ def init_servo():
     try:
         servo = PWM(Pin(SERVO_PIN), SERVO_FREQ)
         servo.duty(SERVO_CENTER_DUTY)  # Start at center position
-        print("✓ Servo initialized")
+        print("✓ Servo initialized with corrected duty cycles")
         return True
     except Exception as e:
         print(f"✗ Failed to initialize servo: {e}")
@@ -49,7 +50,6 @@ def init_servo():
 
 def angle_to_duty(angle):
     """Convert angle (0-180) to duty cycle"""
-    # Linear interpolation between min and max duty
     duty = SERVO_MIN_DUTY + (angle / 180) * (SERVO_MAX_DUTY - SERVO_MIN_DUTY)
     return int(duty)
 
@@ -72,7 +72,7 @@ def move_servo(angle):
             time.sleep(step_delay)
 
         current_angle = target_angle
-        print(f"🔧 Servo moved to {angle}°")
+        print(f"🔧 Servo moved to {angle}° (duty: {angle_to_duty(angle)})")
 
     except Exception as e:
         print(f"✗ Error moving servo: {e}")
@@ -168,7 +168,7 @@ def init_mqtt():
 def main():
     """Main program loop"""
     print("=" * 50)
-    print("ESP8266 Servo Controller")
+    print("ESP8266 Servo Controller - FIXED VERSION")
     print(f"Team ID: {TEAM_ID}")
     print("=" * 50)
 
